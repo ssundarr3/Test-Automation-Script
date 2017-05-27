@@ -1,0 +1,77 @@
+#!/bin/bash
+
+# Checking for incorrect number of command line arguments
+if [ "${#}" -lt 2 ]; then
+	>&2 echo "Incorrect number of command line arguments"
+	>&2 echo "Usage: ./runSuite suite.txt ./myprogram  [options: -v for no valgrind -e for no stderr showing]"
+ 	exit 1
+fi;
+
+# iterating through each word in suite.txt (${1})
+for word in $(egrep -o '([^ ])*' "${1}"); do
+	# Checking if .in and .out files exist and are readable
+	# If they're not, error messages outputted to stderr 
+	# and exits with non-zero exit status
+	if [[ ! -f "${word}.in" || ! -r "${word}.in" ]]; then
+		>&2 echo "Input file not found or is unreadable"
+ 		exit 2
+	fi;
+	if [[ ! -f "${word}.out" || ! -r "${word}.out" ]]; then
+		>&2 echo "Output file not found or is unreadable"
+		exit 3
+	fi;
+
+	tempFileName=$(mktemp /tmp/tmp.XXXXXXXXXX)
+
+	# Checking if .args file exists and can be read
+	if [[ -f "${word}.args" || -r "${word}.args" ]]; then
+		# Use .args file as arguments
+		if [[ "${3}" = "-e" || "${4}" = "-e" ]] ; then
+			cat "${word}.in" | "${2}" $(cat "${word}.args") | cat >"${tempFileName}"
+		else
+			cat "${word}.in" | "${2}" $(cat "${word}.args") 2> /dev/null | cat >"${tempFileName}"
+		fi
+	else
+		# Running ./myprogram ($2) with word.in as standard input
+		# and storing output of myprogram in temp file
+		if [[ "${3}" = "-e" || "${4}" = "-e" ]] ; then
+			cat "${word}.in" | "${2}" | cat >"${tempFileName}"
+		else
+			cat "${word}.in" | "${2}" 2> /dev/null | cat >"${tempFileName}"
+		fi
+	fi;
+
+	
+	# comparing temp file and expected out file
+	diff "${word}.out" "${tempFileName}" > /dev/null
+
+	# Checking error code of last run command (diff)
+	if [ "${?}" -ne 0 ]; then
+		echo "Test failed: ${word}"
+		echo "Input:"
+		cat "${word}.in"
+		echo "Expected:"
+		cat "${word}.out"
+		echo "Actual:"
+		cat "${tempFileName}"
+	fi
+
+	# Removing tmp file
+	rm "${tempFileName}"
+
+	# Valgrind
+	if [[ ! "${3}" = "-v" && ! "${4}" = "-v" ]] ; then
+		tempFileName=$(mktemp /tmp/tmp.XXXXXXXXXX)
+
+		cat "${word}.in" | valgrind "${2}" >& "${tempFileName}"
+		countLeaks=$(cat "${tempFileName}" | egrep 'LEAK SUMMARY:' -A 3 | egrep -o 'lost.*' | egrep -o '[1-9]+' | wc -l)
+
+		if [[ "${countLeaks}" -ne 0 ]]; then 
+			echo "Valgrind failed: ${word}"
+			cat "${tempFileName}" | egrep 'LEAK SUMMARY:' -A 3
+		fi
+
+		# Removing tmp file
+		rm "${tempFileName}"
+	fi
+done
